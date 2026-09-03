@@ -1,0 +1,365 @@
+definitions:
+  api.AnswerRequest:
+    properties:
+      idempotencyKey:
+        description: |-
+          IdempotencyKey makes the request safe to retry. Reusing it with a different payload is
+          rejected with 422; omitting it means a retry can only be rejected, not replayed.
+        maxLength: 255
+        type: string
+      optionId:
+        description: OptionID must be one of that question's options.
+        format: uuid
+        type: string
+      questionId:
+        description: QuestionID must be the question the session currently waits on.
+        format: uuid
+        type: string
+    type: object
+  api.HealthResponse:
+    properties:
+      status:
+        enum:
+        - ok
+        - ready
+        type: string
+    type: object
+  api.OptionDTO:
+    properties:
+      id:
+        type: string
+      label:
+        type: string
+      value:
+        type: string
+    type: object
+  api.QuestionDTO:
+    properties:
+      code:
+        type: string
+      id:
+        type: string
+      options:
+        items:
+          $ref: '#/definitions/api.OptionDTO'
+        type: array
+      prompt:
+        type: string
+    type: object
+  api.ResultDTO:
+    properties:
+      primaryDomain:
+        description: PrimaryDomain is null if the safety gate fired before the flow
+          routed into a domain.
+        enum:
+        - DEPRESSION
+        - ANXIETY
+        - TRAUMA
+        type: string
+      recommendedAction:
+        description: |-
+          RecommendedAction distinguishes the two routes to HIGH: IMMEDIATE_SUPPORT is produced
+          only by the safety gate, PRIORITY_SPECIALIST_ASSESSMENT is the most urgent action
+          reachable through scoring alone.
+        enum:
+        - SELF_CARE_RESOURCES
+        - SPECIALIST_ASSESSMENT
+        - PRIORITY_SPECIALIST_ASSESSMENT
+        - IMMEDIATE_SUPPORT
+        type: string
+      riskLevel:
+        enum:
+        - LOW
+        - MEDIUM
+        - HIGH
+        type: string
+    type: object
+  api.SessionDTO:
+    properties:
+      currentDomain:
+        description: CurrentDomain is null until the intake answer routes the session
+          into a domain.
+        enum:
+        - DEPRESSION
+        - ANXIETY
+        - TRAUMA
+        type: string
+      currentQuestionId:
+        description: CurrentQuestionID is the question the session waits on, null
+          once it is terminal.
+        type: string
+      highRiskDetected:
+        description: HighRiskDetected is true once the safety gate has fired for this
+          session.
+        type: boolean
+      sessionId:
+        type: string
+      status:
+        description: |-
+          Status is IN_PROGRESS while the session accepts answers. COMPLETED and HIGH_RISK are
+          terminal; a further answer returns 409 session_closed.
+        enum:
+        - IN_PROGRESS
+        - COMPLETED
+        - HIGH_RISK
+        type: string
+    type: object
+  api.SessionStateResponse:
+    properties:
+      currentQuestion:
+        $ref: '#/definitions/api.QuestionDTO'
+      session:
+        $ref: '#/definitions/api.SessionDTO'
+    type: object
+  api.SubmitAnswerResponse:
+    properties:
+      currentQuestion:
+        $ref: '#/definitions/api.QuestionDTO'
+      highRisk:
+        description: HighRisk is true when this answer tripped the safety gate.
+        type: boolean
+      outcome:
+        description: 'Outcome is a machine-readable status: NEXT_QUESTION, COMPLETED,
+          HIGH_RISK or REPLAYED.'
+        enum:
+        - NEXT_QUESTION
+        - COMPLETED
+        - HIGH_RISK
+        - REPLAYED
+        type: string
+      result:
+        allOf:
+        - $ref: '#/definitions/api.ResultDTO'
+        description: Result is present for COMPLETED and HIGH_RISK, null while the
+          flow continues.
+      session:
+        $ref: '#/definitions/api.SessionDTO'
+    type: object
+  apierr.Response:
+    properties:
+      code:
+        description: Code is the stable machine-readable error code. Clients branch
+          on this.
+        enum:
+        - invalid_request
+        - option_not_found
+        - session_not_found
+        - question_mismatch
+        - session_closed
+        - session_not_complete
+        - idempotency_key_reused
+        - request_too_large
+        - route_not_found
+        - method_not_allowed
+        - db_unavailable
+        - internal_error
+        type: string
+      message:
+        description: Message is human-readable and not stable; do not branch on it.
+        type: string
+      requestId:
+        description: RequestID is the correlation ID, also returned in the X-Request-ID
+          header.
+        type: string
+    type: object
+info:
+  contact: {}
+paths:
+  /documentation:
+    get:
+      description: Interactive API documentation with Swagger UI.
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: HTML page with Swagger UI
+          schema:
+            type: string
+      summary: API Documentation
+      tags:
+      - documentation
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HealthResponse'
+      summary: Liveness probe
+      tags:
+      - Operations
+  /ready:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HealthResponse'
+        "503":
+          description: db_unavailable
+          schema:
+            $ref: '#/definitions/apierr.Response'
+      summary: Readiness probe
+      tags:
+      - Operations
+  /triage/sessions:
+    post:
+      parameters:
+      - description: Correlation ID; generated when omitted and echoed back in the
+          response header
+        in: header
+        name: X-Request-ID
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.SessionStateResponse'
+        "500":
+          description: internal_error
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "503":
+          description: db_unavailable
+          schema:
+            $ref: '#/definitions/apierr.Response'
+      summary: Start a triage session
+      tags:
+      - Triage
+  /triage/sessions/{session_id}:
+    get:
+      parameters:
+      - description: Session ID (UUID)
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Correlation ID; generated when omitted and echoed back in the
+          response header
+        in: header
+        name: X-Request-ID
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SessionStateResponse'
+        "400":
+          description: invalid_request — session_id is not a UUID
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "404":
+          description: session_not_found
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "500":
+          description: internal_error
+          schema:
+            $ref: '#/definitions/apierr.Response'
+      summary: Get the current session state
+      tags:
+      - Triage
+  /triage/sessions/{session_id}/answers:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Session ID (UUID)
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Correlation ID; generated when omitted and echoed back in the
+          response header
+        in: header
+        name: X-Request-ID
+        type: string
+      - description: Answer to the current question
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.AnswerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SubmitAnswerResponse'
+        "400":
+          description: invalid_request or option_not_found
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "404":
+          description: session_not_found
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "409":
+          description: question_mismatch (also the losing writer under concurrency)
+            or session_closed
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "413":
+          description: request_too_large — body over 16 KiB
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "422":
+          description: idempotency_key_reused — same key, different payload
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "500":
+          description: internal_error
+          schema:
+            $ref: '#/definitions/apierr.Response'
+      summary: Submit an answer
+      tags:
+      - Triage
+  /triage/sessions/{session_id}/result:
+    get:
+      parameters:
+      - description: Session ID (UUID)
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Correlation ID; generated when omitted and echoed back in the
+          response header
+        in: header
+        name: X-Request-ID
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ResultDTO'
+        "400":
+          description: invalid_request — session_id is not a UUID
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "404":
+          description: session_not_found
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "409":
+          description: session_not_complete — the session is still running
+          schema:
+            $ref: '#/definitions/apierr.Response'
+        "500":
+          description: internal_error
+          schema:
+            $ref: '#/definitions/apierr.Response'
+      summary: Get the final triage result
+      tags:
+      - Triage
+swagger: "2.0"
