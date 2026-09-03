@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: triage-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: triage
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d triage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: triage-service
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DB_HOST: "db"
+      DB_PORT: "5432"
+      DB_USER: "postgres"
+      DB_PASSWORD: "postgres"
+      DB_NAME: "triage"
+      DB_SSLMODE: "disable"
+      # Unified service tagging. The Datadog agent injects these into a pod itself; they are
+      # set here so a local run produces log lines with the same shape as a deployed one.
+      DD_SERVICE: "triage-service"
+      DD_ENV: "local"
+      DD_VERSION: "dev"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
