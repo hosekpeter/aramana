@@ -290,16 +290,26 @@ func (repo *PostgresRepository) FindIdempotentResponse(ctx context.Context, q Qu
 	return record, nil
 }
 
-func (repo *PostgresRepository) SaveIdempotentResponse(ctx context.Context, q Querier, record IdempotencyRecord) error {
-	_, err := q.Exec(ctx,
+func (repo *PostgresRepository) ReserveIdempotencyKey(ctx context.Context, q Querier, record IdempotencyRecord) (bool, error) {
+	tag, err := q.Exec(ctx,
 		`INSERT INTO idempotency_keys (key, session_id, request_fingerprint, response_body)
-		 VALUES ($1, $2, $3, $4)`,
-		record.Key, record.SessionID, record.RequestFingerprint, record.ResponseBody)
+		 VALUES ($1, $2, $3, 'null'::jsonb)
+		 ON CONFLICT (key) DO NOTHING`,
+		record.Key, record.SessionID, record.RequestFingerprint)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return ErrConflict
-		}
-		return fmt.Errorf("insert idempotency key: %w", err)
+		return false, fmt.Errorf("reserve idempotency key: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (repo *PostgresRepository) CompleteIdempotencyKey(ctx context.Context, q Querier, key string, response []byte) error {
+	tag, err := q.Exec(ctx,
+		`UPDATE idempotency_keys SET response_body = $2 WHERE key = $1`, key, response)
+	if err != nil {
+		return fmt.Errorf("complete idempotency key: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("complete idempotency key %q: reservation is gone", key)
 	}
 	return nil
 }

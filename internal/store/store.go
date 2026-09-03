@@ -49,8 +49,9 @@ type TriageRepository interface {
 
 	AppendEvent(ctx context.Context, q Querier, event model.Event) error
 
+	ReserveIdempotencyKey(ctx context.Context, q Querier, record IdempotencyRecord) (bool, error)
+	CompleteIdempotencyKey(ctx context.Context, q Querier, key string, response []byte) error
 	FindIdempotentResponse(ctx context.Context, q Querier, key string) (IdempotencyRecord, error)
-	SaveIdempotentResponse(ctx context.Context, q Querier, record IdempotencyRecord) error
 }
 
 // IdempotencyRecord is a stored response for a previously handled request. The fingerprint
@@ -59,5 +60,6 @@ type IdempotencyRecord struct {
 	Key                string
 	SessionID          string
 	RequestFingerprint string
-	ResponseBody       []byte
+
+	ResponseBody []byte
 }

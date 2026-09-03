@@ -171,22 +171,33 @@ func (s *Service) SubmitAnswer(ctx context.Context, cmd SubmitAnswerCommand) (*S
 
 	var out *SubmitAnswerResult
 	err := s.uow.WithTx(ctx, func(q store.Querier) error {
-		replay, err := s.replayIfKnown(ctx, q, cmd)
+
+		session, err := s.repo.LockSessionByID(ctx, q, cmd.SessionID)
 		if err != nil {
-			return err
-		}
-		if replay != nil {
-			out = replay
-			return nil
+			return translateNotFound(err, ErrSessionNotFound)
 		}
 
-		result, err := s.applyAnswer(ctx, q, cmd)
+		if cmd.IdempotencyKey != "" {
+			replay, err := s.claimIdempotencyKey(ctx, q, cmd)
+			if err != nil {
+				return err
+			}
+			if replay != nil {
+				out = replay
+				return nil
+			}
+		}
+
+		result, err := s.applyAnswer(ctx, q, session, cmd)
 		if err != nil {
 			return err
 		}
 		out = result
 
-		return s.rememberResponse(ctx, q, cmd, result)
+		if cmd.IdempotencyKey == "" {
+			return nil
+		}
+		return s.storeResponse(ctx, q, cmd, result)
 	})
 	if err != nil {
 		return nil, err
@@ -194,18 +205,24 @@ func (s *Service) SubmitAnswer(ctx context.Context, cmd SubmitAnswerCommand) (*S
 	return out, nil
 }
 
-// replayIfKnown returns the stored response for an already processed idempotency key, or
-// nil when the request has not been seen before.
-func (s *Service) replayIfKnown(ctx context.Context, q store.Querier, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
-	if cmd.IdempotencyKey == "" {
+func (s *Service) claimIdempotencyKey(ctx context.Context, q store.Querier, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
+	acquired, err := s.repo.ReserveIdempotencyKey(ctx, q, store.IdempotencyRecord{
+		Key:                cmd.IdempotencyKey,
+		SessionID:          cmd.SessionID,
+		RequestFingerprint: cmd.fingerprint(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if acquired {
 		return nil, nil
 	}
 
 	record, err := s.repo.FindIdempotentResponse(ctx, q, cmd.IdempotencyKey)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, nil
-	}
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrQuestionMismatch
+		}
 		return nil, err
 	}
 	if record.RequestFingerprint != cmd.fingerprint() {
@@ -216,41 +233,27 @@ func (s *Service) replayIfKnown(ctx context.Context, q store.Querier, cmd Submit
 	if err := json.Unmarshal(record.ResponseBody, &stored); err != nil {
 		return nil, fmt.Errorf("decode stored idempotent response: %w", err)
 	}
+
+	if stored.Outcome == "" {
+		return nil, fmt.Errorf("idempotency key %q has no stored response", cmd.IdempotencyKey)
+	}
 	stored.Outcome = OutcomeReplayed
 	return &stored, nil
 }
 
-// rememberResponse stores the response so a retry with the same key replays it verbatim.
-func (s *Service) rememberResponse(ctx context.Context, q store.Querier, cmd SubmitAnswerCommand, result *SubmitAnswerResult) error {
-	if cmd.IdempotencyKey == "" {
-		return nil
-	}
-
+// storeResponse attaches the response to the key claimed earlier in this transaction, so a
+// later retry replays it verbatim.
+func (s *Service) storeResponse(ctx context.Context, q store.Querier, cmd SubmitAnswerCommand, result *SubmitAnswerResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("encode idempotent response: %w", err)
 	}
-
-	err = s.repo.SaveIdempotentResponse(ctx, q, store.IdempotencyRecord{
-		Key:                cmd.IdempotencyKey,
-		SessionID:          cmd.SessionID,
-		RequestFingerprint: cmd.fingerprint(),
-		ResponseBody:       body,
-	})
-	if errors.Is(err, store.ErrConflict) {
-		return ErrQuestionMismatch
-	}
-	return err
+	return s.repo.CompleteIdempotencyKey(ctx, q, cmd.IdempotencyKey, body)
 }
 
-// applyAnswer performs the validated state transition for one answer.
-func (s *Service) applyAnswer(ctx context.Context, q store.Querier, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
-	// The row lock is what serialises concurrent answers: the second transaction blocks
-	// here until the first commits, then observes the advanced current question.
-	session, err := s.repo.LockSessionByID(ctx, q, cmd.SessionID)
-	if err != nil {
-		return nil, translateNotFound(err, ErrSessionNotFound)
-	}
+// applyAnswer performs the validated state transition for one answer against a session the
+// caller has already locked.
+func (s *Service) applyAnswer(ctx context.Context, q store.Querier, session model.Session, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
 	if session.Status != model.StatusInProgress {
 		return nil, ErrSessionClosed
 	}
