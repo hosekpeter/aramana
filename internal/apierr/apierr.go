@@ -25,8 +25,11 @@ const (
 
 // Response is the body of every error reply.
 type Response struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
+	// Code is the stable machine-readable error code. Clients branch on this.
+	Code string `json:"code" enums:"invalid_request,option_not_found,session_not_found,question_mismatch,session_closed,session_not_complete,idempotency_key_reused,request_too_large,route_not_found,method_not_allowed,db_unavailable,internal_error"`
+	// Message is human-readable and not stable; do not branch on it.
+	Message string `json:"message"`
+	// RequestID is the correlation ID, also returned in the X-Request-ID header.
 	RequestID string `json:"requestId"`
 }
 
