@@ -1,6 +1,3 @@
-// Package service orchestrates the triage use cases. It owns transaction boundaries and
-// error translation, but no SQL and no decision logic: persistence lives in internal/store
-// and the adaptive rules live in internal/flow.
 package service
 
 import (
@@ -15,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"adaptive-intelligent-triage/internal/flow"
-	"adaptive-intelligent-triage/internal/ids"
-	"adaptive-intelligent-triage/internal/model"
-	"adaptive-intelligent-triage/internal/store"
+	"aramana/internal/flow"
+	"aramana/internal/ids"
+	"aramana/internal/model"
+	"aramana/internal/store"
 )
 
 // Outcome describes what happened to a submitted answer. It is a stable machine-readable

@@ -7,10 +7,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"adaptive-intelligent-triage/internal/config"
-	"adaptive-intelligent-triage/internal/dependencies"
-	"adaptive-intelligent-triage/internal/httpserver"
-	"adaptive-intelligent-triage/internal/logger"
+	"aramana/internal/config"
+	"aramana/internal/dependencies"
+	"aramana/internal/httpserver"
+	"aramana/internal/logger"
 )
 
 func main() {

@@ -1,7 +1,7 @@
 package flow
 
 import (
-	"adaptive-intelligent-triage/internal/model"
+	"aramana/internal/model"
 )
 
 // Kind describes the shape of a decision.

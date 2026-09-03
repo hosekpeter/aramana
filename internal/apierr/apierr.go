@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"adaptive-intelligent-triage/internal/service"
+	"aramana/internal/service"
 )
 
 // Stable machine-readable error codes. Clients branch on these, not on the message.

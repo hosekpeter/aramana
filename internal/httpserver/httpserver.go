@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
-	"adaptive-intelligent-triage/internal/api"
-	"adaptive-intelligent-triage/internal/config"
-	"adaptive-intelligent-triage/internal/dependencies"
+	"aramana/internal/api"
+	"aramana/internal/config"
+	"aramana/internal/dependencies"
 )
 
 // shutdownTimeout bounds how long in-flight requests get to finish.

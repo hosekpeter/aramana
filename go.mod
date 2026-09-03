@@ -1,4 +1,4 @@
-module adaptive-intelligent-triage
+module aramana
 
 go 1.26
 

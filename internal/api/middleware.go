@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
-	"adaptive-intelligent-triage/internal/apierr"
-	"adaptive-intelligent-triage/internal/ids"
+	"aramana/internal/apierr"
+	"aramana/internal/ids"
 )
 
 type requestContextKey string

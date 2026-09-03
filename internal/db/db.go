@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"adaptive-intelligent-triage/internal/config"
+	"aramana/internal/config"
 )
 
 //go:embed migrations/*.sql

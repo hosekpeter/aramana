@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"adaptive-intelligent-triage/internal/config"
+	"aramana/internal/config"
 )
 
 // Logger is the default implementation.

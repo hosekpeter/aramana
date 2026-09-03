@@ -1,4 +1,3 @@
-// Package config loads configuration from the environment.
 package config
 
 import (
@@ -37,7 +36,7 @@ type DBConfig struct {
 type LogConfig struct {
 	Level   slog.Level `env:"LOG_LEVEL" envDefault:"info"`
 	Format  string     `env:"LOG_FORMAT" envDefault:"json"`
-	Service string     `env:"LOG_SERVICE" envDefault:"adaptive-intelligent-triage"`
+	Service string     `env:"LOG_SERVICE" envDefault:"aramana"`
 }
 
 // Load reads the environment and returns a validated configuration.

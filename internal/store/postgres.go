@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"adaptive-intelligent-triage/internal/ids"
-	"adaptive-intelligent-triage/internal/model"
+	"aramana/internal/ids"
+	"aramana/internal/model"
 )
 
 // uniqueViolation is the PostgreSQL error code for a unique constraint violation.

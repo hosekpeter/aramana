@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"adaptive-intelligent-triage/internal/model"
-	"adaptive-intelligent-triage/internal/service"
+	"aramana/internal/model"
+	"aramana/internal/service"
 )
 
 // Base holds process-wide concerns.

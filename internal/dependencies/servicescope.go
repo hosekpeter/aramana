@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"adaptive-intelligent-triage/internal/config"
-	"adaptive-intelligent-triage/internal/db"
-	"adaptive-intelligent-triage/internal/logger"
-	"adaptive-intelligent-triage/internal/service"
-	"adaptive-intelligent-triage/internal/store"
+	"aramana/internal/config"
+	"aramana/internal/db"
+	"aramana/internal/logger"
+	"aramana/internal/service"
+	"aramana/internal/store"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )

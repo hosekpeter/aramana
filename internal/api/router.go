@@ -10,10 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"adaptive-intelligent-triage/internal/apierr"
-	"adaptive-intelligent-triage/internal/dependencies"
-	"adaptive-intelligent-triage/internal/logger"
-	"adaptive-intelligent-triage/internal/service"
+	"aramana/internal/apierr"
+	"aramana/internal/dependencies"
+	"aramana/internal/logger"
+	"aramana/internal/service"
 )
 
 var (

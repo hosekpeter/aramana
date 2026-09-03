@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"adaptive-intelligent-triage/internal/model"
+	"aramana/internal/model"
 )
 
 var ErrNotFound = errors.New("not found")

@@ -1,8 +1,8 @@
 package api
 
 import (
-	"adaptive-intelligent-triage/internal/model"
-	"adaptive-intelligent-triage/internal/service"
+	"aramana/internal/model"
+	"aramana/internal/service"
 )
 
 type OptionDTO struct {
