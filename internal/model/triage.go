@@ -20,7 +20,10 @@ const (
 const (
 	ActionSelfCareResources    = "SELF_CARE_RESOURCES"
 	ActionSpecialistAssessment = "SPECIALIST_ASSESSMENT"
-	ActionImmediateSupport     = "IMMEDIATE_SUPPORT"
+	// ActionPriorityAssessment is the most urgent action reachable through scoring alone.
+	ActionPriorityAssessment = "PRIORITY_SPECIALIST_ASSESSMENT"
+	// ActionImmediateSupport is reserved for the safety gate and is never produced by scoring.
+	ActionImmediateSupport = "IMMEDIATE_SUPPORT"
 )
 
 // Option is one selectable answer to a question.

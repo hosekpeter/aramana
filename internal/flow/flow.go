@@ -144,7 +144,7 @@ func Evaluate(domain *string, answers []model.Answer, rules RuleSet) model.Triag
 	action := model.ActionSelfCareResources
 	switch riskLevel {
 	case model.RiskHigh:
-		action = model.ActionImmediateSupport
+		action = model.ActionPriorityAssessment
 	case model.RiskMedium:
 		action = model.ActionSpecialistAssessment
 	}
