@@ -123,29 +123,22 @@ func TestPostgresRepositoryPersistsOneTransaction(t *testing.T) {
 	response := []byte(`{"outcome":"NEXT_QUESTION"}`)
 
 	err = testUoW.WithTx(ctx, func(q Querier) error {
-		if err := repo.CreateSession(ctx, q, session); err != nil {
-			return err
-		}
-		if err := repo.InsertAnswer(ctx, q, answer); err != nil {
-			return err
-		}
-		if err := repo.UpdateSessionState(ctx, q, model.SessionUpdate{
-			SessionID: session.ID, Status: model.StatusCompleted,
-		}); err != nil {
-			return err
-		}
-		if err := repo.UpsertResult(ctx, q, session.ID, result); err != nil {
-			return err
-		}
-		if err := repo.AppendEvent(ctx, q, model.Event{
+		require.NoError(t, repo.CreateSession(ctx, q, session))
+		require.NoError(t, repo.InsertAnswer(ctx, q, answer))
+		require.NoError(t, repo.UpdateSessionState(ctx, q, model.SessionUpdate{
+			SessionID: session.ID,
+			Status:    model.StatusCompleted}))
+
+		require.NoError(t, repo.UpsertResult(ctx, q, session.ID, result))
+
+		require.NoError(t, repo.AppendEvent(ctx, q, model.Event{
 			ID: ids.NewString(), SessionID: session.ID, Type: "repository.test", Payload: []byte(`{}`),
-		}); err != nil {
-			return err
-		}
+		}))
+
 		reserved, err := repo.ReserveIdempotencyKey(ctx, q, record)
-		if err != nil || !reserved {
-			return err
-		}
+		require.NoError(t, err)
+		assert.True(t, reserved)
+
 		return repo.CompleteIdempotencyKey(ctx, q, record.Key, response)
 	})
 	require.NoError(t, err)
