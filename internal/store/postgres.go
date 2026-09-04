@@ -18,12 +18,13 @@ const uniqueViolation = "23505"
 
 // PostgresRepository is the PostgreSQL implementation of TriageRepository. All SQL for the
 // service lives here rather than in the service layer.
-type PostgresRepository struct{}
+type PostgresRepository struct {
+	q Querier
+}
 
-// NewPostgresRepository returns a repository. It holds no connection on purpose — the
-// connection always arrives as a Querier argument.
-func NewPostgresRepository() *PostgresRepository {
-	return &PostgresRepository{}
+// NewPostgresRepository returns a repository backed by a pool or transaction.
+func NewPostgresRepository(q Querier) *PostgresRepository {
+	return &PostgresRepository{q: q}
 }
 
 // TxRunner runs transactions against a pgx pool.
@@ -39,7 +40,7 @@ func NewTxRunner(pool *pgxpool.Pool) *TxRunner {
 // WithTx runs fn inside a transaction. The rollback is deferred rather than conditional, so
 // an early return or a panic cannot leave the transaction open; rolling back an already
 // committed transaction is a no-op in pgx.
-func (r *TxRunner) WithTx(ctx context.Context, fn func(q Querier) error) error {
+func (r *TxRunner) WithTx(ctx context.Context, fn func(repo TriageRepository) error) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -48,7 +49,7 @@ func (r *TxRunner) WithTx(ctx context.Context, fn func(q Querier) error) error {
 		_ = tx.Rollback(ctx)
 	}()
 
-	if err := fn(tx); err != nil {
+	if err := fn(NewPostgresRepository(tx)); err != nil {
 		return err
 	}
 
@@ -60,17 +61,17 @@ func (r *TxRunner) WithTx(ctx context.Context, fn func(q Querier) error) error {
 
 const questionColumns = `id, code, prompt, domain_code, is_entry`
 
-func (repo *PostgresRepository) EntryQuestion(ctx context.Context, q Querier) (model.Question, error) {
-	row := q.QueryRow(ctx, `SELECT `+questionColumns+` FROM questions WHERE is_entry AND active LIMIT 1`)
-	return repo.scanQuestionWithOptions(ctx, q, row)
+func (repo *PostgresRepository) EntryQuestion(ctx context.Context) (model.Question, error) {
+	row := repo.q.QueryRow(ctx, `SELECT `+questionColumns+` FROM questions WHERE is_entry AND active LIMIT 1`)
+	return repo.scanQuestionWithOptions(ctx, row)
 }
 
-func (repo *PostgresRepository) QuestionByID(ctx context.Context, q Querier, questionID string) (model.Question, error) {
-	row := q.QueryRow(ctx, `SELECT `+questionColumns+` FROM questions WHERE id = $1 AND active`, questionID)
-	return repo.scanQuestionWithOptions(ctx, q, row)
+func (repo *PostgresRepository) QuestionByID(ctx context.Context, questionID string) (model.Question, error) {
+	row := repo.q.QueryRow(ctx, `SELECT `+questionColumns+` FROM questions WHERE id = $1 AND active`, questionID)
+	return repo.scanQuestionWithOptions(ctx, row)
 }
 
-func (repo *PostgresRepository) scanQuestionWithOptions(ctx context.Context, q Querier, row pgx.Row) (model.Question, error) {
+func (repo *PostgresRepository) scanQuestionWithOptions(ctx context.Context, row pgx.Row) (model.Question, error) {
 	var question model.Question
 
 	if err := row.Scan(&question.ID, &question.Code, &question.Prompt, &question.DomainCode, &question.IsEntry); err != nil {
@@ -80,7 +81,7 @@ func (repo *PostgresRepository) scanQuestionWithOptions(ctx context.Context, q Q
 		return model.Question{}, fmt.Errorf("scan question: %w", err)
 	}
 
-	options, err := repo.optionsForQuestion(ctx, q, question.ID)
+	options, err := repo.optionsForQuestion(ctx, question.ID)
 	if err != nil {
 		return model.Question{}, err
 	}
@@ -88,8 +89,8 @@ func (repo *PostgresRepository) scanQuestionWithOptions(ctx context.Context, q Q
 	return question, nil
 }
 
-func (repo *PostgresRepository) optionsForQuestion(ctx context.Context, q Querier, questionID string) ([]model.Option, error) {
-	rows, err := q.Query(ctx,
+func (repo *PostgresRepository) optionsForQuestion(ctx context.Context, questionID string) ([]model.Option, error) {
+	rows, err := repo.q.Query(ctx,
 		`SELECT id, question_id, value, label, score, next_question_id, risk_flag, score_weighted
 		 FROM question_options WHERE question_id = $1 ORDER BY sort_order, value`, questionID)
 	if err != nil {
@@ -112,9 +113,9 @@ func (repo *PostgresRepository) optionsForQuestion(ctx context.Context, q Querie
 	return options, nil
 }
 
-func (repo *PostgresRepository) QuestionDomain(ctx context.Context, q Querier, questionID string) (*string, error) {
+func (repo *PostgresRepository) QuestionDomain(ctx context.Context, questionID string) (*string, error) {
 	var domain *string
-	err := q.QueryRow(ctx, `SELECT domain_code FROM questions WHERE id = $1`, questionID).Scan(&domain)
+	err := repo.q.QueryRow(ctx, `SELECT domain_code FROM questions WHERE id = $1`, questionID).Scan(&domain)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -124,9 +125,9 @@ func (repo *PostgresRepository) QuestionDomain(ctx context.Context, q Querier, q
 	return domain, nil
 }
 
-func (repo *PostgresRepository) OptionForQuestion(ctx context.Context, q Querier, questionID, optionID string) (model.Option, error) {
+func (repo *PostgresRepository) OptionForQuestion(ctx context.Context, questionID, optionID string) (model.Option, error) {
 	var option model.Option
-	err := q.QueryRow(ctx,
+	err := repo.q.QueryRow(ctx,
 		`SELECT id, question_id, value, label, score, next_question_id, risk_flag, score_weighted
 		 FROM question_options WHERE id = $1 AND question_id = $2`, optionID, questionID).
 		Scan(&option.ID, &option.QuestionID, &option.Value, &option.Label,
@@ -140,8 +141,8 @@ func (repo *PostgresRepository) OptionForQuestion(ctx context.Context, q Querier
 	return option, nil
 }
 
-func (repo *PostgresRepository) CreateSession(ctx context.Context, q Querier, session model.Session) error {
-	_, err := q.Exec(ctx,
+func (repo *PostgresRepository) CreateSession(ctx context.Context, session model.Session) error {
+	_, err := repo.q.Exec(ctx,
 		`INSERT INTO triage_sessions (id, status, current_question_id, current_domain_code, high_risk_detected)
 		 VALUES ($1, $2, $3, $4, $5)`,
 		session.ID, session.Status, session.CurrentQuestionID, session.CurrentDomain, session.HighRiskDetected)
@@ -153,12 +154,12 @@ func (repo *PostgresRepository) CreateSession(ctx context.Context, q Querier, se
 
 const sessionColumns = `id, status, current_question_id, current_domain_code, high_risk_detected, created_at, updated_at`
 
-func (repo *PostgresRepository) SessionByID(ctx context.Context, q Querier, sessionID string) (model.Session, error) {
-	return repo.scanSession(q.QueryRow(ctx, `SELECT `+sessionColumns+` FROM triage_sessions WHERE id = $1`, sessionID))
+func (repo *PostgresRepository) SessionByID(ctx context.Context, sessionID string) (model.Session, error) {
+	return repo.scanSession(repo.q.QueryRow(ctx, `SELECT `+sessionColumns+` FROM triage_sessions WHERE id = $1`, sessionID))
 }
 
-func (repo *PostgresRepository) LockSessionByID(ctx context.Context, q Querier, sessionID string) (model.Session, error) {
-	return repo.scanSession(q.QueryRow(ctx, `SELECT `+sessionColumns+` FROM triage_sessions WHERE id = $1 FOR UPDATE`, sessionID))
+func (repo *PostgresRepository) LockSessionByID(ctx context.Context, sessionID string) (model.Session, error) {
+	return repo.scanSession(repo.q.QueryRow(ctx, `SELECT `+sessionColumns+` FROM triage_sessions WHERE id = $1 FOR UPDATE`, sessionID))
 }
 
 func (repo *PostgresRepository) scanSession(row pgx.Row) (model.Session, error) {
@@ -174,8 +175,8 @@ func (repo *PostgresRepository) scanSession(row pgx.Row) (model.Session, error) 
 	return session, nil
 }
 
-func (repo *PostgresRepository) UpdateSessionState(ctx context.Context, q Querier, update model.SessionUpdate) error {
-	_, err := q.Exec(ctx,
+func (repo *PostgresRepository) UpdateSessionState(ctx context.Context, update model.SessionUpdate) error {
+	_, err := repo.q.Exec(ctx,
 		`UPDATE triage_sessions
 		 SET status = $1, current_question_id = $2, current_domain_code = $3,
 		     high_risk_detected = $4, updated_at = NOW()
@@ -187,8 +188,8 @@ func (repo *PostgresRepository) UpdateSessionState(ctx context.Context, q Querie
 	return nil
 }
 
-func (repo *PostgresRepository) InsertAnswer(ctx context.Context, q Querier, answer model.Answer) error {
-	_, err := q.Exec(ctx,
+func (repo *PostgresRepository) InsertAnswer(ctx context.Context, answer model.Answer) error {
+	_, err := repo.q.Exec(ctx,
 		`INSERT INTO session_answers (id, session_id, question_id, option_id)
 		 VALUES ($1, $2, $3, $4)`,
 		answer.ID, answer.SessionID, answer.QuestionID, answer.OptionID)
@@ -205,8 +206,8 @@ func (repo *PostgresRepository) InsertAnswer(ctx context.Context, q Querier, ans
 // routing metadata the decision engine needs. Called with a transaction, it sees answers
 // written earlier in that same transaction — which is what makes the final result account
 // for the answer currently being processed.
-func (repo *PostgresRepository) AnswersForSession(ctx context.Context, q Querier, sessionID string) ([]model.Answer, error) {
-	rows, err := q.Query(ctx,
+func (repo *PostgresRepository) AnswersForSession(ctx context.Context, sessionID string) ([]model.Answer, error) {
+	rows, err := repo.q.Query(ctx,
 		`SELECT sa.id, sa.session_id, sa.question_id, que.code, sa.option_id, opt.value,
 		        opt.score, que.domain_code, opt.score_weighted, sa.answered_at
 		 FROM session_answers sa
@@ -235,8 +236,8 @@ func (repo *PostgresRepository) AnswersForSession(ctx context.Context, q Querier
 	return answers, nil
 }
 
-func (repo *PostgresRepository) UpsertResult(ctx context.Context, q Querier, sessionID string, result model.TriageResult) error {
-	_, err := q.Exec(ctx,
+func (repo *PostgresRepository) UpsertResult(ctx context.Context, sessionID string, result model.TriageResult) error {
+	_, err := repo.q.Exec(ctx,
 		`INSERT INTO triage_results (id, session_id, primary_domain, risk_level, recommended_action, total_score)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (session_id) DO UPDATE SET
@@ -251,9 +252,9 @@ func (repo *PostgresRepository) UpsertResult(ctx context.Context, q Querier, ses
 	return nil
 }
 
-func (repo *PostgresRepository) ResultForSession(ctx context.Context, q Querier, sessionID string) (model.TriageResult, error) {
+func (repo *PostgresRepository) ResultForSession(ctx context.Context, sessionID string) (model.TriageResult, error) {
 	var result model.TriageResult
-	err := q.QueryRow(ctx,
+	err := repo.q.QueryRow(ctx,
 		`SELECT primary_domain, risk_level, recommended_action, total_score
 		 FROM triage_results WHERE session_id = $1`, sessionID).
 		Scan(&result.PrimaryDomain, &result.RiskLevel, &result.RecommendedAction, &result.TotalScore)
@@ -266,8 +267,8 @@ func (repo *PostgresRepository) ResultForSession(ctx context.Context, q Querier,
 	return result, nil
 }
 
-func (repo *PostgresRepository) AppendEvent(ctx context.Context, q Querier, event model.Event) error {
-	_, err := q.Exec(ctx,
+func (repo *PostgresRepository) AppendEvent(ctx context.Context, event model.Event) error {
+	_, err := repo.q.Exec(ctx,
 		`INSERT INTO triage_events (id, session_id, event_type, payload) VALUES ($1, $2, $3, $4)`,
 		event.ID, event.SessionID, event.Type, event.Payload)
 	if err != nil {
@@ -276,9 +277,9 @@ func (repo *PostgresRepository) AppendEvent(ctx context.Context, q Querier, even
 	return nil
 }
 
-func (repo *PostgresRepository) FindIdempotentResponse(ctx context.Context, q Querier, key string) (IdempotencyRecord, error) {
+func (repo *PostgresRepository) FindIdempotentResponse(ctx context.Context, key string) (IdempotencyRecord, error) {
 	var record IdempotencyRecord
-	err := q.QueryRow(ctx,
+	err := repo.q.QueryRow(ctx,
 		`SELECT key, session_id, request_fingerprint, response_body FROM idempotency_keys WHERE key = $1`, key).
 		Scan(&record.Key, &record.SessionID, &record.RequestFingerprint, &record.ResponseBody)
 	if err != nil {
@@ -290,8 +291,8 @@ func (repo *PostgresRepository) FindIdempotentResponse(ctx context.Context, q Qu
 	return record, nil
 }
 
-func (repo *PostgresRepository) ReserveIdempotencyKey(ctx context.Context, q Querier, record IdempotencyRecord) (bool, error) {
-	tag, err := q.Exec(ctx,
+func (repo *PostgresRepository) ReserveIdempotencyKey(ctx context.Context, record IdempotencyRecord) (bool, error) {
+	tag, err := repo.q.Exec(ctx,
 		`INSERT INTO idempotency_keys (key, session_id, request_fingerprint, response_body)
 		 VALUES ($1, $2, $3, 'null'::jsonb)
 		 ON CONFLICT (key) DO NOTHING`,
@@ -302,8 +303,8 @@ func (repo *PostgresRepository) ReserveIdempotencyKey(ctx context.Context, q Que
 	return tag.RowsAffected() == 1, nil
 }
 
-func (repo *PostgresRepository) CompleteIdempotencyKey(ctx context.Context, q Querier, key string, response []byte) error {
-	tag, err := q.Exec(ctx,
+func (repo *PostgresRepository) CompleteIdempotencyKey(ctx context.Context, key string, response []byte) error {
+	tag, err := repo.q.Exec(ctx,
 		`UPDATE idempotency_keys SET response_body = $2 WHERE key = $1`, key, response)
 	if err != nil {
 		return fmt.Errorf("complete idempotency key: %w", err)

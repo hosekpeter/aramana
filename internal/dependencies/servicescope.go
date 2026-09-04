@@ -50,12 +50,11 @@ func NewServiceScope(ctx context.Context, cfg config.Config) (ServiceScope, erro
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
-	repo := store.NewPostgresRepository()
 	txRunner := store.NewTxRunner(pool)
 
 	return &serviceScope{
 		base:   &base{logger: l.Logger()},
 		pool:   pool,
-		triage: service.New(repo, txRunner, l.Logger()),
+		triage: service.New(txRunner, l.Logger()),
 	}, nil
 }

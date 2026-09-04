@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 		}
 
 		testPool = pool
-		testRepo = NewPostgresRepository()
+		testRepo = NewPostgresRepository(pool)
 		testUoW = NewTxRunner(pool)
 	}
 
@@ -66,8 +66,8 @@ func integrationRepository(t *testing.T) (*PostgresRepository, *pgxpool.Pool) {
 func TestPostgresRepositoryEntryQuestion(t *testing.T) {
 	t.Parallel()
 
-	repo, pool := integrationRepository(t)
-	question, err := repo.EntryQuestion(context.Background(), pool)
+	repo, _ := integrationRepository(t)
+	question, err := repo.EntryQuestion(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, question.IsEntry)
@@ -79,25 +79,25 @@ func TestPostgresRepositoryEntryQuestion(t *testing.T) {
 func TestPostgresRepositoryOptionOwnership(t *testing.T) {
 	t.Parallel()
 
-	repo, pool := integrationRepository(t)
-	entry, err := repo.EntryQuestion(context.Background(), pool)
+	repo, _ := integrationRepository(t)
+	entry, err := repo.EntryQuestion(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, entry.Options[0].NextQuestionID)
 
-	option, err := repo.OptionForQuestion(context.Background(), pool, entry.ID, entry.Options[0].ID)
+	option, err := repo.OptionForQuestion(t.Context(), entry.ID, entry.Options[0].ID)
 	require.NoError(t, err)
 	assert.Equal(t, entry.Options[0].ID, option.ID)
 
-	_, err = repo.OptionForQuestion(context.Background(), pool, *entry.Options[0].NextQuestionID, entry.Options[0].ID)
+	_, err = repo.OptionForQuestion(t.Context(), *entry.Options[0].NextQuestionID, entry.Options[0].ID)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestPostgresRepositoryPersistsOneTransaction(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	repo, pool := integrationRepository(t)
-	entry, err := repo.EntryQuestion(ctx, pool)
+	entry, err := repo.EntryQuestion(ctx)
 	require.NoError(t, err)
 
 	session := model.Session{
@@ -122,43 +122,43 @@ func TestPostgresRepositoryPersistsOneTransaction(t *testing.T) {
 	}
 	response := []byte(`{"outcome":"NEXT_QUESTION"}`)
 
-	err = testUoW.WithTx(ctx, func(q Querier) error {
-		require.NoError(t, repo.CreateSession(ctx, q, session))
-		require.NoError(t, repo.InsertAnswer(ctx, q, answer))
-		require.NoError(t, repo.UpdateSessionState(ctx, q, model.SessionUpdate{
+	err = testUoW.WithTx(ctx, func(txRepo TriageRepository) error {
+		require.NoError(t, txRepo.CreateSession(ctx, session))
+		require.NoError(t, txRepo.InsertAnswer(ctx, answer))
+		require.NoError(t, txRepo.UpdateSessionState(ctx, model.SessionUpdate{
 			SessionID: session.ID,
 			Status:    model.StatusCompleted}))
 
-		require.NoError(t, repo.UpsertResult(ctx, q, session.ID, result))
+		require.NoError(t, txRepo.UpsertResult(ctx, session.ID, result))
 
-		require.NoError(t, repo.AppendEvent(ctx, q, model.Event{
+		require.NoError(t, txRepo.AppendEvent(ctx, model.Event{
 			ID: ids.NewString(), SessionID: session.ID, Type: "repository.test", Payload: []byte(`{}`),
 		}))
 
-		reserved, err := repo.ReserveIdempotencyKey(ctx, q, record)
+		reserved, err := txRepo.ReserveIdempotencyKey(ctx, record)
 		require.NoError(t, err)
 		assert.True(t, reserved)
 
-		return repo.CompleteIdempotencyKey(ctx, q, record.Key, response)
+		return txRepo.CompleteIdempotencyKey(ctx, record.Key, response)
 	})
 	require.NoError(t, err)
 
-	persistedSession, err := repo.SessionByID(ctx, pool, session.ID)
+	persistedSession, err := repo.SessionByID(ctx, session.ID)
 	require.NoError(t, err)
 	assert.Equal(t, model.StatusCompleted, persistedSession.Status)
 	assert.Nil(t, persistedSession.CurrentQuestionID)
 
-	answers, err := repo.AnswersForSession(ctx, pool, session.ID)
+	answers, err := repo.AnswersForSession(ctx, session.ID)
 	require.NoError(t, err)
 	require.Len(t, answers, 1)
 	assert.Equal(t, entry.Options[0].Value, answers[0].OptionValue)
 	assert.False(t, answers[0].ScoreWeighted)
 
-	persistedResult, err := repo.ResultForSession(ctx, pool, session.ID)
+	persistedResult, err := repo.ResultForSession(ctx, session.ID)
 	require.NoError(t, err)
 	assert.Equal(t, result, persistedResult)
 
-	persistedRecord, err := repo.FindIdempotentResponse(ctx, pool, record.Key)
+	persistedRecord, err := repo.FindIdempotentResponse(ctx, record.Key)
 	require.NoError(t, err)
 	assert.JSONEq(t, string(response), string(persistedRecord.ResponseBody))
 

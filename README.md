@@ -141,8 +141,8 @@ score.
 - Flow transitions, options, domain selection, scores, and risk flags are stored as data.
   Only the small scoring thresholds remain in Go.
 - `flow.Decide` is a pure function, while the service handles persistence and transactions.
-- Pool and transaction both implement one `store.Querier` interface, preventing accidental
-  reads outside the active transaction.
+- `UnitOfWork` gives the service a repository bound to the active transaction, preventing
+  accidental reads through the connection pool while a transaction is in progress.
 - The high-risk event is inserted in the same transaction as the session update. This is the
   write side of the transactional outbox pattern.
 

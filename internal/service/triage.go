@@ -70,19 +70,16 @@ type SubmitAnswerResult struct {
 
 // Service implements the triage use cases.
 type Service struct {
-	repo    store.TriageRepository
 	uow     store.UnitOfWork
 	rules   flow.RuleSet
 	logger  *slog.Logger
 	timeout time.Duration
 }
 
-// New builds a Service. Note that it takes no connection and no pgx type: every database
-// access goes through uow, which hands the repository a transaction. That is what prevents
-// a query from running outside the transaction that is supposed to contain it.
-func New(repo store.TriageRepository, uow store.UnitOfWork, logger *slog.Logger) *Service {
+// New builds a Service. Every database access goes through uow, which provides a repository
+// bound to the current transaction.
+func New(uow store.UnitOfWork, logger *slog.Logger) *Service {
 	return &Service{
-		repo:    repo,
 		uow:     uow,
 		rules:   flow.DefaultRuleSet(),
 		logger:  logger,
@@ -96,8 +93,8 @@ func (s *Service) CreateSession(ctx context.Context) (*model.SessionState, error
 	defer cancel()
 
 	var state *model.SessionState
-	err := s.uow.WithTx(ctx, func(q store.Querier) error {
-		question, err := s.repo.EntryQuestion(ctx, q)
+	err := s.uow.WithTx(ctx, func(repo store.TriageRepository) error {
+		question, err := repo.EntryQuestion(ctx)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("no active entry question configured")
@@ -111,7 +108,7 @@ func (s *Service) CreateSession(ctx context.Context) (*model.SessionState, error
 			CurrentQuestionID: &question.ID,
 			CurrentDomain:     question.DomainCode,
 		}
-		if err := s.repo.CreateSession(ctx, q, session); err != nil {
+		if err := repo.CreateSession(ctx, session); err != nil {
 			return err
 		}
 
@@ -134,8 +131,8 @@ func (s *Service) GetSession(ctx context.Context, sessionID string) (*model.Sess
 	defer cancel()
 
 	var state *model.SessionState
-	err := s.uow.WithTx(ctx, func(q store.Querier) error {
-		session, err := s.repo.SessionByID(ctx, q, sessionID)
+	err := s.uow.WithTx(ctx, func(repo store.TriageRepository) error {
+		session, err := repo.SessionByID(ctx, sessionID)
 		if err != nil {
 			return translateNotFound(err, ErrSessionNotFound)
 		}
@@ -145,7 +142,7 @@ func (s *Service) GetSession(ctx context.Context, sessionID string) (*model.Sess
 			return nil
 		}
 
-		question, err := s.repo.QuestionByID(ctx, q, *session.CurrentQuestionID)
+		question, err := repo.QuestionByID(ctx, *session.CurrentQuestionID)
 		if err != nil {
 			return err
 		}
@@ -170,15 +167,15 @@ func (s *Service) SubmitAnswer(ctx context.Context, cmd SubmitAnswerCommand) (*S
 	defer cancel()
 
 	var out *SubmitAnswerResult
-	err := s.uow.WithTx(ctx, func(q store.Querier) error {
+	err := s.uow.WithTx(ctx, func(repo store.TriageRepository) error {
 
-		session, err := s.repo.LockSessionByID(ctx, q, cmd.SessionID)
+		session, err := repo.LockSessionByID(ctx, cmd.SessionID)
 		if err != nil {
 			return translateNotFound(err, ErrSessionNotFound)
 		}
 
 		if cmd.IdempotencyKey != "" {
-			replay, err := s.claimIdempotencyKey(ctx, q, cmd)
+			replay, err := s.claimIdempotencyKey(ctx, repo, cmd)
 			if err != nil {
 				return err
 			}
@@ -188,7 +185,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, cmd SubmitAnswerCommand) (*S
 			}
 		}
 
-		result, err := s.applyAnswer(ctx, q, session, cmd)
+		result, err := s.applyAnswer(ctx, repo, session, cmd)
 		if err != nil {
 			return err
 		}
@@ -197,7 +194,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, cmd SubmitAnswerCommand) (*S
 		if cmd.IdempotencyKey == "" {
 			return nil
 		}
-		return s.storeResponse(ctx, q, cmd, result)
+		return s.storeResponse(ctx, repo, cmd, result)
 	})
 	if err != nil {
 		return nil, err
@@ -205,8 +202,8 @@ func (s *Service) SubmitAnswer(ctx context.Context, cmd SubmitAnswerCommand) (*S
 	return out, nil
 }
 
-func (s *Service) claimIdempotencyKey(ctx context.Context, q store.Querier, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
-	acquired, err := s.repo.ReserveIdempotencyKey(ctx, q, store.IdempotencyRecord{
+func (s *Service) claimIdempotencyKey(ctx context.Context, repo store.TriageRepository, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
+	acquired, err := repo.ReserveIdempotencyKey(ctx, store.IdempotencyRecord{
 		Key:                cmd.IdempotencyKey,
 		SessionID:          cmd.SessionID,
 		RequestFingerprint: cmd.fingerprint(),
@@ -218,7 +215,7 @@ func (s *Service) claimIdempotencyKey(ctx context.Context, q store.Querier, cmd 
 		return nil, nil
 	}
 
-	record, err := s.repo.FindIdempotentResponse(ctx, q, cmd.IdempotencyKey)
+	record, err := repo.FindIdempotentResponse(ctx, cmd.IdempotencyKey)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, ErrQuestionMismatch
@@ -243,17 +240,17 @@ func (s *Service) claimIdempotencyKey(ctx context.Context, q store.Querier, cmd 
 
 // storeResponse attaches the response to the key claimed earlier in this transaction, so a
 // later retry replays it verbatim.
-func (s *Service) storeResponse(ctx context.Context, q store.Querier, cmd SubmitAnswerCommand, result *SubmitAnswerResult) error {
+func (s *Service) storeResponse(ctx context.Context, repo store.TriageRepository, cmd SubmitAnswerCommand, result *SubmitAnswerResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("encode idempotent response: %w", err)
 	}
-	return s.repo.CompleteIdempotencyKey(ctx, q, cmd.IdempotencyKey, body)
+	return repo.CompleteIdempotencyKey(ctx, cmd.IdempotencyKey, body)
 }
 
 // applyAnswer performs the validated state transition for one answer against a session the
 // caller has already locked.
-func (s *Service) applyAnswer(ctx context.Context, q store.Querier, session model.Session, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
+func (s *Service) applyAnswer(ctx context.Context, repo store.TriageRepository, session model.Session, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
 	if session.Status != model.StatusInProgress {
 		return nil, ErrSessionClosed
 	}
@@ -261,7 +258,7 @@ func (s *Service) applyAnswer(ctx context.Context, q store.Querier, session mode
 		return nil, ErrQuestionMismatch
 	}
 
-	option, err := s.repo.OptionForQuestion(ctx, q, cmd.QuestionID, cmd.OptionID)
+	option, err := repo.OptionForQuestion(ctx, cmd.QuestionID, cmd.OptionID)
 	if err != nil {
 		return nil, translateNotFound(err, ErrOptionNotFound)
 	}
@@ -272,7 +269,7 @@ func (s *Service) applyAnswer(ctx context.Context, q store.Querier, session mode
 		QuestionID: cmd.QuestionID,
 		OptionID:   cmd.OptionID,
 	}
-	if err := s.repo.InsertAnswer(ctx, q, answer); err != nil {
+	if err := repo.InsertAnswer(ctx, answer); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			// The question is already answered in this session, so the flow has moved on.
 			return nil, ErrQuestionMismatch
@@ -282,14 +279,14 @@ func (s *Service) applyAnswer(ctx context.Context, q store.Querier, session mode
 
 	// Read through the transaction, so this includes the answer inserted above. Reading
 	// through the pool here was what made the final result ignore the last answer.
-	answers, err := s.repo.AnswersForSession(ctx, q, cmd.SessionID)
+	answers, err := repo.AnswersForSession(ctx, cmd.SessionID)
 	if err != nil {
 		return nil, err
 	}
 
 	var nextDomain *string
 	if !option.RiskFlag && option.NextQuestionID != nil {
-		nextDomain, err = s.repo.QuestionDomain(ctx, q, *option.NextQuestionID)
+		nextDomain, err = repo.QuestionDomain(ctx, *option.NextQuestionID)
 		if err != nil {
 			return nil, err
 		}
@@ -301,13 +298,13 @@ func (s *Service) applyAnswer(ctx context.Context, q store.Querier, session mode
 		Rules:   s.rules,
 	}, option, nextDomain)
 
-	return s.persistDecision(ctx, q, session, decision)
+	return s.persistDecision(ctx, repo, session, decision)
 }
 
 // persistDecision writes the transition and builds the response. The response session is
 // assembled from the values just written rather than re-read, which avoids a second round
 // trip and removes the previous silent error swallowing on the reload path.
-func (s *Service) persistDecision(ctx context.Context, q store.Querier, session model.Session, decision flow.Decision) (*SubmitAnswerResult, error) {
+func (s *Service) persistDecision(ctx context.Context, repo store.TriageRepository, session model.Session, decision flow.Decision) (*SubmitAnswerResult, error) {
 	update := model.SessionUpdate{
 		SessionID:        session.ID,
 		CurrentDomain:    decision.Domain,
@@ -340,12 +337,12 @@ func (s *Service) persistDecision(ctx context.Context, q store.Querier, session 
 		return nil, fmt.Errorf("unhandled decision kind %d", decision.Kind)
 	}
 
-	if err := s.repo.UpdateSessionState(ctx, q, update); err != nil {
+	if err := repo.UpdateSessionState(ctx, update); err != nil {
 		return nil, err
 	}
 
 	if decision.Result != nil {
-		if err := s.repo.UpsertResult(ctx, q, session.ID, *decision.Result); err != nil {
+		if err := repo.UpsertResult(ctx, session.ID, *decision.Result); err != nil {
 			return nil, err
 		}
 	}
@@ -358,7 +355,7 @@ func (s *Service) persistDecision(ctx context.Context, q store.Querier, session 
 		if err != nil {
 			return nil, err
 		}
-		if err := s.repo.AppendEvent(ctx, q, stored); err != nil {
+		if err := repo.AppendEvent(ctx, stored); err != nil {
 			return nil, err
 		}
 		s.logger.Warn("triage_event_recorded",
@@ -366,7 +363,7 @@ func (s *Service) persistDecision(ctx context.Context, q store.Querier, session 
 	}
 
 	if decision.Kind == flow.KindNextQuestion {
-		question, err := s.repo.QuestionByID(ctx, q, *decision.NextQuestionID)
+		question, err := repo.QuestionByID(ctx, *decision.NextQuestionID)
 		if err != nil {
 			return nil, err
 		}
@@ -398,13 +395,13 @@ func (s *Service) GetResult(ctx context.Context, sessionID string) (*model.Triag
 	defer cancel()
 
 	var out *model.TriageResult
-	err := s.uow.WithTx(ctx, func(q store.Querier) error {
-		session, err := s.repo.SessionByID(ctx, q, sessionID)
+	err := s.uow.WithTx(ctx, func(repo store.TriageRepository) error {
+		session, err := repo.SessionByID(ctx, sessionID)
 		if err != nil {
 			return translateNotFound(err, ErrSessionNotFound)
 		}
 
-		result, err := s.repo.ResultForSession(ctx, q, sessionID)
+		result, err := repo.ResultForSession(ctx, sessionID)
 		if err == nil {
 			out = &result
 			return nil
@@ -419,7 +416,7 @@ func (s *Service) GetResult(ctx context.Context, sessionID string) (*model.Triag
 		// Terminal session without a stored result. SubmitAnswer always writes one, so
 		// this only happens for data written before that guarantee existed; recompute and
 		// persist rather than fail.
-		repaired, err := s.recomputeResult(ctx, q, session)
+		repaired, err := s.recomputeResult(ctx, repo, session)
 		if err != nil {
 			return err
 		}
@@ -432,8 +429,8 @@ func (s *Service) GetResult(ctx context.Context, sessionID string) (*model.Triag
 	return out, nil
 }
 
-func (s *Service) recomputeResult(ctx context.Context, q store.Querier, session model.Session) (model.TriageResult, error) {
-	answers, err := s.repo.AnswersForSession(ctx, q, session.ID)
+func (s *Service) recomputeResult(ctx context.Context, repo store.TriageRepository, session model.Session) (model.TriageResult, error) {
+	answers, err := repo.AnswersForSession(ctx, session.ID)
 	if err != nil {
 		return model.TriageResult{}, err
 	}
@@ -447,7 +444,7 @@ func (s *Service) recomputeResult(ctx context.Context, q store.Querier, session 
 	// session_status, not status: "status" is where the log backend reads the severity of
 	// the line, so an application value must not be written there.
 	s.logger.Warn("triage_result_recomputed", "session_id", session.ID, "session_status", session.Status)
-	if err := s.repo.UpsertResult(ctx, q, session.ID, result); err != nil {
+	if err := repo.UpsertResult(ctx, session.ID, result); err != nil {
 		return model.TriageResult{}, err
 	}
 	return result, nil
