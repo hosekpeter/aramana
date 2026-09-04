@@ -46,8 +46,6 @@ func NewRouter(scope dependencies.ServiceScope) http.Handler {
 	// returns, so it has to run first.
 	router.Use(requestContext(baseLogger))
 	router.Use(recoverPanic(baseLogger))
-	// Allow simple local UI to call the API (development convenience)
-	router.Use(corsMiddleware())
 
 	// Without these, chi answers an unknown path with a plain-text body, so a client that
 	// mistypes a URL gets a different error shape than every other failure.

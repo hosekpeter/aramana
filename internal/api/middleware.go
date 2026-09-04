@@ -88,22 +88,3 @@ func recoverPanic(logger *slog.Logger) func(http.Handler) http.Handler {
 		})
 	}
 }
-
-// corsMiddleware adds permissive CORS headers to allow the simple UI to call the API from
-// a different origin (local dev only). It also handles OPTIONS preflight requests.
-func corsMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Allow any origin in local development. In production, restrict to trusted origins.
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, X-Request-Id")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
-			if r.Method == http.MethodOptions {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
