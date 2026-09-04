@@ -122,7 +122,8 @@ psql:
 # ---------------------------------------------------------------------------- docs generation (swag)
 SWAG_VERSION ?= v1.16.6
 DOC_DIR ?= docs
-SWAG_MAIN ?= cmd/triage/main.go
+SWAG_DIRS ?= cmd/triage,internal/api,internal/apierr
+SWAG_MAIN ?= main.go
 
 ## docs: generate Swagger documentation into docs/
 .PHONY: docs
@@ -130,5 +131,5 @@ docs:
 	@echo "Generating Swagger documentation into $(DOC_DIR) using Swag $(SWAG_VERSION)"
 	@go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init \
 		--parseInternal --parseDependency=false --parseDepth=1 --outputTypes json,yaml \
-		-g $(SWAG_MAIN) -o $(DOC_DIR)
+		-d $(SWAG_DIRS) -g $(SWAG_MAIN) -o $(DOC_DIR)
 	@echo "Docs generated to $(DOC_DIR)/swagger.json and $(DOC_DIR)/swagger.yaml"
