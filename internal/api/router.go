@@ -32,8 +32,6 @@ type handler struct {
 
 // NewRouter wires the HTTP routes.
 func NewRouter(scope dependencies.ServiceScope) http.Handler {
-	// Named baseLogger rather than logger so it does not shadow the logger package, which
-	// the handlers below use for ErrorAttr.
 	baseLogger := scope.Base().Logger()
 	h := &handler{
 		triage:    scope.Triage(),

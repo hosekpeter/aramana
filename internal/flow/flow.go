@@ -44,8 +44,7 @@ type RuleSet struct {
 	HighScore   int
 }
 
-// DefaultRuleSet preserves the MEDIUM boundary of the original implementation (a symptom
-// score of 2 or more) and lowers HIGH into the reachable range.
+// DefaultRuleSet returns the scoring thresholds.
 func DefaultRuleSet() RuleSet {
 	return RuleSet{MediumScore: 2, HighScore: 3}
 }
@@ -54,8 +53,7 @@ func DefaultRuleSet() RuleSet {
 type State struct {
 	// Domain is the session's current domain, nil if the flow has not routed yet.
 	Domain *string
-	// Answers must include the answer being evaluated. Passing a stale list is the bug
-	// this signature is designed to make obvious.
+	// Answers includes the selected answer.
 	Answers []model.Answer
 	Rules   RuleSet
 }

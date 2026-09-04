@@ -18,21 +18,18 @@ import (
 	"aramana/internal/store"
 )
 
-// Outcome describes what happened to a submitted answer. It is a stable machine-readable
-// value, unlike the free-text message the previous implementation returned.
+// Outcome is a machine-readable submission result.
 type Outcome string
 
 const (
 	OutcomeNextQuestion Outcome = "NEXT_QUESTION"
 	OutcomeCompleted    Outcome = "COMPLETED"
 	OutcomeHighRisk     Outcome = "HIGH_RISK"
-	// OutcomeReplayed means the request carried an idempotency key that had already been
-	// processed, and the original response was returned unchanged.
+	// OutcomeReplayed marks a response loaded from the idempotency store.
 	OutcomeReplayed Outcome = "REPLAYED"
 )
 
-// defaultTimeout bounds every use case. Without it a slow query holds an HTTP handler, a
-// pool connection and a row lock for as long as the database takes.
+// defaultTimeout bounds each use case.
 const defaultTimeout = 5 * time.Second
 
 // maxIdempotencyKeyLength matches the column width in the schema.
@@ -53,13 +50,7 @@ func (c SubmitAnswerCommand) fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SubmitAnswerResult is the outcome of accepting (or replaying) one answer. The JSON tags
-// exist because this struct is what gets stored for idempotent replay.
-//
-// They stay snake_case while the API is camelCase on purpose: this is a persistence format,
-// not a wire format. Renaming a tag here would make every already-stored response decode
-// into zero values on replay. The client never sees these names — internal/api/dto.go
-// translates the struct into the wire types.
+// SubmitAnswerResult is persisted for idempotency replay and converted to an API DTO.
 type SubmitAnswerResult struct {
 	Session         model.Session       `json:"session"`
 	CurrentQuestion *model.Question     `json:"current_question,omitempty"`
@@ -76,8 +67,7 @@ type Service struct {
 	timeout time.Duration
 }
 
-// New builds a Service. Every database access goes through uow, which provides a repository
-// bound to the current transaction.
+// New builds a Service.
 func New(uow store.UnitOfWork, logger *slog.Logger) *Service {
 	return &Service{
 		uow:     uow,
@@ -121,8 +111,7 @@ func (s *Service) CreateSession(ctx context.Context) (*model.SessionState, error
 	return state, nil
 }
 
-// GetSession returns the current state of a session, including the question it waits on.
-// This is also the resume path: a client that lost its place reads the current question here.
+// GetSession returns the current session state.
 func (s *Service) GetSession(ctx context.Context, sessionID string) (*model.SessionState, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, ErrInvalidRequest
@@ -238,8 +227,6 @@ func (s *Service) claimIdempotencyKey(ctx context.Context, repo store.TriageRepo
 	return &stored, nil
 }
 
-// storeResponse attaches the response to the key claimed earlier in this transaction, so a
-// later retry replays it verbatim.
 func (s *Service) storeResponse(ctx context.Context, repo store.TriageRepository, cmd SubmitAnswerCommand, result *SubmitAnswerResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
@@ -248,8 +235,6 @@ func (s *Service) storeResponse(ctx context.Context, repo store.TriageRepository
 	return repo.CompleteIdempotencyKey(ctx, cmd.IdempotencyKey, body)
 }
 
-// applyAnswer performs the validated state transition for one answer against a session the
-// caller has already locked.
 func (s *Service) applyAnswer(ctx context.Context, repo store.TriageRepository, session model.Session, cmd SubmitAnswerCommand) (*SubmitAnswerResult, error) {
 	if session.Status != model.StatusInProgress {
 		return nil, ErrSessionClosed
@@ -271,14 +256,12 @@ func (s *Service) applyAnswer(ctx context.Context, repo store.TriageRepository, 
 	}
 	if err := repo.InsertAnswer(ctx, answer); err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			// The question is already answered in this session, so the flow has moved on.
 			return nil, ErrQuestionMismatch
 		}
 		return nil, err
 	}
 
-	// Read through the transaction, so this includes the answer inserted above. Reading
-	// through the pool here was what made the final result ignore the last answer.
+	// The transaction includes the answer inserted above.
 	answers, err := repo.AnswersForSession(ctx, cmd.SessionID)
 	if err != nil {
 		return nil, err
@@ -301,9 +284,7 @@ func (s *Service) applyAnswer(ctx context.Context, repo store.TriageRepository, 
 	return s.persistDecision(ctx, repo, session, decision)
 }
 
-// persistDecision writes the transition and builds the response. The response session is
-// assembled from the values just written rather than re-read, which avoids a second round
-// trip and removes the previous silent error swallowing on the reload path.
+// persistDecision writes the transition and its response.
 func (s *Service) persistDecision(ctx context.Context, repo store.TriageRepository, session model.Session, decision flow.Decision) (*SubmitAnswerResult, error) {
 	update := model.SessionUpdate{
 		SessionID:        session.ID,
@@ -318,7 +299,6 @@ func (s *Service) persistDecision(ctx context.Context, repo store.TriageReposito
 		update.Status = model.StatusInProgress
 		update.CurrentQuestionID = decision.NextQuestionID
 		out.Outcome = OutcomeNextQuestion
-		// The next question is not a result, so it is not part of the decision payload.
 		out.Result = nil
 
 	case flow.KindCompleted:
@@ -347,9 +327,7 @@ func (s *Service) persistDecision(ctx context.Context, repo store.TriageReposito
 		}
 	}
 
-	// Events are written inside this transaction. If the transaction rolls back the event
-	// disappears with it, and if it commits the event is guaranteed to be there — neither
-	// held when the event was written on a pooled connection.
+	// Persist outbox events with the state transition.
 	for _, event := range decision.Events {
 		stored, err := buildEvent(session.ID, event)
 		if err != nil {
@@ -382,11 +360,7 @@ func (s *Service) persistDecision(ctx context.Context, repo store.TriageReposito
 	return out, nil
 }
 
-// GetResult returns the final result of a session.
-//
-// A session that is still in progress yields ErrSessionNotComplete, which the API maps to a
-// 409. The previous implementation returned an unwrapped error here and the client saw a
-// 500 for an ordinary state.
+// GetResult returns a final result.
 func (s *Service) GetResult(ctx context.Context, sessionID string) (*model.TriageResult, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, ErrInvalidRequest
@@ -413,9 +387,7 @@ func (s *Service) GetResult(ctx context.Context, sessionID string) (*model.Triag
 			return ErrSessionNotComplete
 		}
 
-		// Terminal session without a stored result. SubmitAnswer always writes one, so
-		// this only happens for data written before that guarantee existed; recompute and
-		// persist rather than fail.
+		// Repair terminal sessions created before result persistence was guaranteed.
 		repaired, err := s.recomputeResult(ctx, repo, session)
 		if err != nil {
 			return err
@@ -450,7 +422,6 @@ func (s *Service) recomputeResult(ctx context.Context, repo store.TriageReposito
 	return result, nil
 }
 
-// buildEvent serialises a decision event into a stored event record.
 func buildEvent(sessionID string, event flow.Event) (model.Event, error) {
 	payload := make(map[string]any, len(event.Payload)+2)
 	maps.Copy(payload, event.Payload)
@@ -470,8 +441,6 @@ func buildEvent(sessionID string, event flow.Event) (model.Event, error) {
 	}, nil
 }
 
-// translateNotFound maps a repository miss onto the matching domain error and passes other
-// errors through unchanged.
 func translateNotFound(err error, notFound error) error {
 	if errors.Is(err, store.ErrNotFound) {
 		return notFound
