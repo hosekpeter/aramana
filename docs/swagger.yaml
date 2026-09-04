@@ -164,20 +164,12 @@ definitions:
     type: object
 info:
   contact: {}
+  description: |-
+    Adaptive mental-health triage. A client starts a session, submits one answer
+    at a time, and receives either the next question or a final result.
+  title: ARAMANA Adaptive Intelligent Triage API
+  version: 1.0.0
 paths:
-  /documentation:
-    get:
-      description: Interactive API documentation with Swagger UI.
-      produces:
-      - text/html
-      responses:
-        "200":
-          description: HTML page with Swagger UI
-          schema:
-            type: string
-      summary: API Documentation
-      tags:
-      - documentation
   /health:
     get:
       produces:
@@ -363,3 +355,8 @@ paths:
       tags:
       - Triage
 swagger: "2.0"
+tags:
+- description: Triage sessions, answers and results
+  name: Triage
+- description: Liveness and readiness probes
+  name: Operations

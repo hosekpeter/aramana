@@ -61,9 +61,9 @@ func NewRouter(scope dependencies.ServiceScope) http.Handler {
 	router.Get("/health", h.health)
 	router.Get("/ready", h.ready)
 
-	router.Get("/documentation/doc.json", h.specJSON)
-	router.Get("/documentation/openapi.yaml", h.specYAML)
-	router.Get("/documentation/*", httpSwagger.Handler(httpSwagger.URL("/documentation/doc.json")))
+	router.Get("/documentation/swagger.json", h.specJSON)
+	router.Get("/documentation/swagger.yaml", h.specYAML)
+	router.Get("/documentation/*", httpSwagger.Handler(httpSwagger.URL("/documentation/swagger.json")))
 	router.Get("/documentation", http.RedirectHandler("/documentation/index.html", http.StatusMovedPermanently).ServeHTTP)
 
 	router.Route("/triage/sessions", func(r chi.Router) {

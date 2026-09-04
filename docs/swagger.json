@@ -1,29 +1,12 @@
 {
     "swagger": "2.0",
     "info": {
-        "contact": {}
+        "description": "Adaptive mental-health triage. A client starts a session, submits one answer\nat a time, and receives either the next question or a final result.",
+        "title": "ARAMANA Adaptive Intelligent Triage API",
+        "contact": {},
+        "version": "1.0.0"
     },
     "paths": {
-        "/documentation": {
-            "get": {
-                "description": "Interactive API documentation with Swagger UI.",
-                "produces": [
-                    "text/html"
-                ],
-                "tags": [
-                    "documentation"
-                ],
-                "summary": "API Documentation",
-                "responses": {
-                    "200": {
-                        "description": "HTML page with Swagger UI",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
         "/health": {
             "get": {
                 "produces": [
@@ -508,5 +491,15 @@
                 }
             }
         }
-    }
+    },
+    "tags": [
+        {
+            "description": "Triage sessions, answers and results",
+            "name": "Triage"
+        },
+        {
+            "description": "Liveness and readiness probes",
+            "name": "Operations"
+        }
+    ]
 }
